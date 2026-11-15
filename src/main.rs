@@ -1,7 +1,7 @@
         use axum::{
             extract::{State, WebSocketUpgrade, ws::{Message, WebSocket}},
-            response::{Html, Response},
-            routing::get,
+            response::{Html, IntoResponse, Response},
+            routing::{get, post},
             Json, Router,
         };
         use futures_util::{SinkExt, StreamExt};
@@ -26,7 +26,7 @@
                 .route("/healthz", get(health))
                 .route("/readyz", get(health))
                 .route("/ws", get(ws_upgrade))
-                .route("/api/demo-event", get(demo_event))
+                .route("/api/demo-event", post(demo_event))
                 .layer(TraceLayer::new_for_http())
                 .with_state(state);
             let addr: SocketAddr = env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".into()).parse()?;
@@ -49,13 +49,13 @@
       const out=document.getElementById('events');
       const ws=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws`);
       ws.onmessage=(event)=>{out.textContent=event.data};
-      document.getElementById('emit').onclick=()=>fetch('/api/demo-event');
+      document.getElementById('emit').onclick=()=>fetch('/api/demo-event',{method:'POST'});
     </script>"#;
     Html(format!("<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>Apostille Me</title><style>body{{font-family:system-ui;max-width:64rem;margin:auto;padding:2rem}}main{{padding:2rem;border:1px solid #ddd;border-radius:1rem}}</style></head><body>{body}{script}</body></html>"))
         }
 
-        async fn health() -> Json<serde_json::Value> {
-            Json(serde_json::json!({"status":"ok","service":"apme-web-dioxus","framework":"Dioxus"}))
+        async fn health() -> impl IntoResponse {
+            ([("cache-control", "no-store")], Json(serde_json::json!({"status":"ok","service":"apme-web-dioxus","framework":"Dioxus"})))
         }
 
         async fn demo_event(State(state): State<AppState>) -> Json<serde_json::Value> {
@@ -87,5 +87,20 @@ async fn ws_loop(socket: WebSocket, mut events: broadcast::Receiver<String>) {
                 _ => {},
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn probe_responses_are_not_cacheable() {
+        let response = health().await.into_response();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        assert_eq!(
+            response.headers().get("cache-control").and_then(|value| value.to_str().ok()),
+            Some("no-store")
+        );
     }
 }
